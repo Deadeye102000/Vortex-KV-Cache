@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  vortex-master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vortex-master
+    command: ["/app/vortex-server", "-p", "6379", "-shards", "16"]
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - vortex-net
+
+  vortex-replica-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vortex-replica-1
+    command: ["/app/vortex-server", "-p", "6379", "-shards", "16"]
+    ports:
+      - "6380:6379"
+    depends_on:
+      - vortex-master
+    restart: unless-stopped
+    networks:
+      - vortex-net
+
+  vortex-replica-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vortex-replica-2
+    command: ["/app/vortex-server", "-p", "6379", "-shards", "16"]
+    ports:
+      - "6381:6379"
+    depends_on:
+      - vortex-master
+    restart: unless-stopped
+    networks:
+      - vortex-net
+
+  vortex-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vortex-dashboard
+    command: ["/app/vortex-dashboard", "-port", "8080", "-nodes", "vortex-master=vortex-master:6379,vortex-replica-1=vortex-replica-1:6379,vortex-replica-2=vortex-replica-2:6379"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      - vortex-master
+      - vortex-replica-1
+      - vortex-replica-2
+    restart: unless-stopped
+    networks:
+      - vortex-net
+
+networks:
+  vortex-net:
+    driver: bridge
