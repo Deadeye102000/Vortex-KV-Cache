@@ -2,27 +2,35 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"vortex-cache/internal/replication"
 	"vortex-cache/internal/resp"
 	"vortex-cache/internal/store"
 )
 
-// Handler processes parsed RESP commands against a Store instance.
+// Handler processes parsed RESP commands against Store and Replication managers.
 type Handler struct {
 	cache     *store.Store
+	repl      *replication.ReplicaManager
+	master    *replication.MasterManager
 	startTime time.Time
+	conn      net.Conn
 }
 
 // NewHandler creates a new command handler.
-func NewHandler(cache *store.Store, startTime time.Time) *Handler {
+func NewHandler(cache *store.Store, repl *replication.ReplicaManager, master *replication.MasterManager, startTime time.Time, conn net.Conn) *Handler {
 	return &Handler{
 		cache:     cache,
+		repl:      repl,
+		master:    master,
 		startTime: startTime,
+		conn:      conn,
 	}
 }
 
@@ -52,6 +60,10 @@ func (h *Handler) Dispatch(cmd resp.Value) resp.Value {
 		return h.handleTTL(args)
 	case "INFO":
 		return h.handleInfo(args)
+	case "SLAVEOF", "REPLICATEOF":
+		return h.handleSlaveOf(args)
+	case "PSYNC", "SYNC":
+		return h.handlePSync(args)
 	default:
 		return resp.NewError(fmt.Sprintf("ERR unknown command '%s'", cmdName))
 	}
@@ -88,6 +100,11 @@ func (h *Handler) handleGet(args []resp.Value) resp.Value {
 }
 
 func (h *Handler) handleSet(args []resp.Value) resp.Value {
+	// Replicas reject direct client write commands
+	if h.repl != nil && h.repl.IsReadOnly() {
+		return resp.NewError("READONLY You can't write against a read only replica.")
+	}
+
 	if len(args) < 2 {
 		return resp.NewError("ERR wrong number of arguments for 'set' command")
 	}
@@ -100,7 +117,6 @@ func (h *Handler) handleSet(args []resp.Value) resp.Value {
 
 	var ttl time.Duration
 
-	// Parse optional EX/PX flags
 	for i := 2; i < len(args); i++ {
 		flag := strings.ToUpper(h.extractString(args[i]))
 		if flag == "EX" || flag == "PX" {
@@ -118,7 +134,7 @@ func (h *Handler) handleSet(args []resp.Value) resp.Value {
 			} else {
 				ttl = time.Duration(num) * time.Millisecond
 			}
-			i++ // Skip parsed value
+			i++
 		}
 	}
 
@@ -130,6 +146,10 @@ func (h *Handler) handleSet(args []resp.Value) resp.Value {
 }
 
 func (h *Handler) handleDel(args []resp.Value) resp.Value {
+	if h.repl != nil && h.repl.IsReadOnly() {
+		return resp.NewError("READONLY You can't write against a read only replica.")
+	}
+
 	if len(args) == 0 {
 		return resp.NewError("ERR wrong number of arguments for 'del' command")
 	}
@@ -160,6 +180,10 @@ func (h *Handler) handleExists(args []resp.Value) resp.Value {
 }
 
 func (h *Handler) handleExpire(args []resp.Value) resp.Value {
+	if h.repl != nil && h.repl.IsReadOnly() {
+		return resp.NewError("READONLY You can't write against a read only replica.")
+	}
+
 	if len(args) != 2 {
 		return resp.NewError("ERR wrong number of arguments for 'expire' command")
 	}
@@ -199,9 +223,37 @@ func (h *Handler) handleTTL(args []resp.Value) resp.Value {
 	return resp.NewInteger(sec)
 }
 
+func (h *Handler) handleSlaveOf(args []resp.Value) resp.Value {
+	if len(args) != 2 {
+		return resp.NewError("ERR wrong number of arguments for 'slaveof' command")
+	}
+
+	host := h.extractString(args[0])
+	port := h.extractString(args[1])
+
+	if err := h.repl.SlaveOf(host, port); err != nil {
+		return resp.NewError(fmt.Sprintf("ERR %v", err))
+	}
+	return resp.NewSimpleString("OK")
+}
+
+func (h *Handler) handlePSync(args []resp.Value) resp.Value {
+	if h.master != nil && h.conn != nil {
+		go func() {
+			_ = h.master.RegisterReplica(h.conn)
+		}()
+	}
+	return resp.NewSimpleString("FULLRESYNC 0000000000000000000000000000000000000000 0")
+}
+
 func (h *Handler) handleInfo(args []resp.Value) resp.Value {
 	uptimeSec := int64(time.Since(h.startTime).Seconds())
 	keysCount := h.cache.Len()
+
+	replInfo := ""
+	if h.repl != nil {
+		replInfo = h.repl.Info()
+	}
 
 	infoText := fmt.Sprintf("# Server\r\n"+
 		"vortex_version:0.1.0\r\n"+
@@ -209,12 +261,16 @@ func (h *Handler) handleInfo(args []resp.Value) resp.Value {
 		"process_id:%d\r\n"+
 		"uptime_in_seconds:%d\r\n"+
 		"\r\n"+
+		"# Replication\r\n"+
+		"%s\r\n"+
+		"\r\n"+
 		"# Keyspace\r\n"+
 		"%s\r\n"+
 		"db0:keys=%d,expires=0\r\n",
 		runtime.Version(),
 		os.Getpid(),
 		uptimeSec,
+		replInfo,
 		h.cache.Stats(),
 		keysCount,
 	)

@@ -13,34 +13,31 @@ var (
 	ErrStoreClosed       = errors.New("store is closed")
 )
 
+// SnapshotEntry represents a key-value item captured during full-state resync snapshotting.
+type SnapshotEntry struct {
+	Key   string
+	Value []byte
+	TTL   time.Duration
+}
+
+// WriteListener callback function invoked whenever a mutation operation occurs.
+type WriteListener func(cmdName string, key string, val []byte, ttl time.Duration)
+
 // Config configures the Store instance options.
 type Config struct {
-	// ShardCount must be a power of 2 (e.g. 1, 2, 4, 8, 16, 32, 64, 128). Default: 16.
-	ShardCount int
-
-	// MaxKeysPerShard defines maximum keys allowed per shard before eviction is triggered.
-	// 0 indicates unlimited capacity.
-	MaxKeysPerShard int
-
-	// EvictionFactory creates an EvictionPolicy instance per shard.
-	// If nil, no eviction is performed when capacity limit is reached.
-	EvictionFactory EvictionPolicyFactory
-
-	// ActiveSweepInterval is how often background active expiration runs. Default: 100ms.
-	ActiveSweepInterval time.Duration
-
-	// ActiveSweepSampleSize is max keys sampled per shard per cycle. Default: 20.
+	ShardCount            int
+	MaxKeysPerShard       int
+	EvictionFactory       EvictionPolicyFactory
+	ActiveSweepInterval   time.Duration
 	ActiveSweepSampleSize int
-
-	// ActiveSweepMaxCPU is maximum CPU execution duration per active sweep cycle. Default: 1ms.
-	ActiveSweepMaxCPU time.Duration
+	ActiveSweepMaxCPU     time.Duration
 }
 
 // DefaultConfig returns optimal baseline configuration settings with no capacity limits.
 func DefaultConfig() Config {
 	return Config{
 		ShardCount:            16,
-		MaxKeysPerShard:       0, // Unlimited
+		MaxKeysPerShard:       0,
 		EvictionFactory:       nil,
 		ActiveSweepInterval:   100 * time.Millisecond,
 		ActiveSweepSampleSize: 20,
@@ -59,14 +56,16 @@ func WithLRUEviction(shardCount, maxKeysPerShard int) Config {
 
 // Store is the high-performance sharded concurrent cache store.
 type Store struct {
-	cfg        Config
-	shards     []*shard
-	shardMask  uint64
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sweeperWg  sync.WaitGroup
-	closed     bool
-	closedLock sync.RWMutex
+	cfg          Config
+	shards       []*shard
+	shardMask    uint64
+	ctx          context.Context
+	cancel       context.CancelFunc
+	sweeperWg    sync.WaitGroup
+	closed       bool
+	closedLock   sync.RWMutex
+	listenersMu  sync.RWMutex
+	onWriteHooks []WriteListener
 }
 
 // NewStore initializes a new Store with the given configuration options.
@@ -100,21 +99,36 @@ func NewStore(cfg Config) (*Store, error) {
 		cancel:    cancel,
 	}
 
-	// Launch Redis-style probabilistic active background sweeper
 	s.sweeperWg.Add(1)
 	go s.activeExpireLoop()
 
 	return s, nil
 }
 
-// getShard retrieves the appropriate shard for a key via zero-allocation FNV-1a hash & bitwise mask.
+// OnWrite registers a write listener callback function for replication broadcasting.
+func (s *Store) OnWrite(listener WriteListener) {
+	s.listenersMu.Lock()
+	defer s.listenersMu.Unlock()
+	s.onWriteHooks = append(s.onWriteHooks, listener)
+}
+
+func (s *Store) notifyWrite(cmdName string, key string, val []byte, ttl time.Duration) {
+	s.listenersMu.RLock()
+	hooks := s.onWriteHooks
+	s.listenersMu.RUnlock()
+
+	for _, hook := range hooks {
+		hook(cmdName, key, val, ttl)
+	}
+}
+
+// getShard retrieves the appropriate shard for a key.
 func (s *Store) getShard(key string) *shard {
 	hash := fnv1a64(key)
 	return s.shards[hash&s.shardMask]
 }
 
 // Set stores a key-value pair with an optional TTL duration.
-// If shard capacity is reached, triggers eviction policy.
 func (s *Store) Set(key string, val []byte, ttl time.Duration) error {
 	s.closedLock.RLock()
 	defer s.closedLock.RUnlock()
@@ -124,6 +138,7 @@ func (s *Store) Set(key string, val []byte, ttl time.Duration) error {
 
 	now := time.Now().UnixNano()
 	s.getShard(key).set(key, val, ttl, now)
+	s.notifyWrite("SET", key, val, ttl)
 	return nil
 }
 
@@ -147,7 +162,11 @@ func (s *Store) Delete(key string) bool {
 		return false
 	}
 
-	return s.getShard(key).delete(key)
+	deleted := s.getShard(key).delete(key)
+	if deleted {
+		s.notifyWrite("DEL", key, nil, 0)
+	}
+	return deleted
 }
 
 // Exists checks if a non-expired key is present.
@@ -163,7 +182,6 @@ func (s *Store) Exists(key string) bool {
 }
 
 // TTL returns remaining duration and existence flag.
-// Returns -1 for non-expiring keys, -2 if key does not exist.
 func (s *Store) TTL(key string) (time.Duration, bool) {
 	s.closedLock.RLock()
 	defer s.closedLock.RUnlock()
@@ -184,10 +202,14 @@ func (s *Store) Expire(key string, ttl time.Duration) bool {
 	}
 
 	now := time.Now().UnixNano()
-	return s.getShard(key).expire(key, ttl, now)
+	updated := s.getShard(key).expire(key, ttl, now)
+	if updated {
+		s.notifyWrite("EXPIRE", key, nil, ttl)
+	}
+	return updated
 }
 
-// Len returns the current valid key count across all shards.
+// Len returns current valid key count across all shards.
 func (s *Store) Len() int64 {
 	s.closedLock.RLock()
 	defer s.closedLock.RUnlock()
@@ -203,7 +225,39 @@ func (s *Store) Len() int64 {
 	return total
 }
 
-// Close gracefully stops the background active sweeper and shuts down the store.
+// Snapshot returns a thread-safe point-in-time slice of all non-expired entries across shards.
+func (s *Store) Snapshot() []SnapshotEntry {
+	s.closedLock.RLock()
+	defer s.closedLock.RUnlock()
+	if s.closed {
+		return nil
+	}
+
+	now := time.Now().UnixNano()
+	var entries []SnapshotEntry
+
+	for _, shd := range s.shards {
+		shd.mu.RLock()
+		for key, item := range shd.items {
+			if !item.IsExpired(now) {
+				remTTL := item.RemainingTTL(now)
+				valCopy := make([]byte, len(item.Value))
+				copy(valCopy, item.Value)
+
+				entries = append(entries, SnapshotEntry{
+					Key:   key,
+					Value: valCopy,
+					TTL:   remTTL,
+				})
+			}
+		}
+		shd.mu.RUnlock()
+	}
+
+	return entries
+}
+
+// Close gracefully stops the background active sweeper.
 func (s *Store) Close() error {
 	s.closedLock.Lock()
 	if s.closed {
@@ -218,7 +272,6 @@ func (s *Store) Close() error {
 	return nil
 }
 
-// activeExpireLoop runs the Redis-style background probabilistic active expiration algorithm.
 func (s *Store) activeExpireLoop() {
 	defer s.sweeperWg.Done()
 
@@ -235,7 +288,6 @@ func (s *Store) activeExpireLoop() {
 	}
 }
 
-// runActiveSweepCycle executes a single active sweep cycle across shards within CPU deadline.
 func (s *Store) runActiveSweepCycle() {
 	deadline := time.Now().Add(s.cfg.ActiveSweepMaxCPU)
 
@@ -259,7 +311,6 @@ func (s *Store) runActiveSweepCycle() {
 	}
 }
 
-// Stats returns a summary of the store configuration and shard count.
 func (s *Store) Stats() string {
 	return fmt.Sprintf("Shards: %d, MaxKeysPerShard: %d, Keys: %d", s.cfg.ShardCount, s.cfg.MaxKeysPerShard, s.Len())
 }
