@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"sync"
 	"time"
 )
@@ -59,6 +60,7 @@ type Store struct {
 	cfg          Config
 	shards       []*shard
 	shardMask    uint64
+	seed         maphash.Seed
 	ctx          context.Context
 	cancel       context.CancelFunc
 	sweeperWg    sync.WaitGroup
@@ -95,6 +97,7 @@ func NewStore(cfg Config) (*Store, error) {
 		cfg:       cfg,
 		shards:    shards,
 		shardMask: uint64(cfg.ShardCount - 1),
+		seed:      maphash.MakeSeed(),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
@@ -124,7 +127,10 @@ func (s *Store) notifyWrite(cmdName string, key string, val []byte, ttl time.Dur
 
 // getShard retrieves the appropriate shard for a key.
 func (s *Store) getShard(key string) *shard {
-	hash := fnv1a64(key)
+	// Optimization: replaced custom FNV-1a hashing with Go's built-in maphash.
+	// Maphash is significantly faster (using hardware AES-NI instructions where available)
+	// and provides randomized seeds preventing hash collision contention on shards.
+	hash := maphash.String(s.seed, key)
 	return s.shards[hash&s.shardMask]
 }
 
