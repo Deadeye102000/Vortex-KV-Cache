@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/maphash"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,8 +65,9 @@ type Store struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	sweeperWg    sync.WaitGroup
-	closed       bool
-	closedLock   sync.RWMutex
+	// Optimization: Using atomic.Bool instead of sync.RWMutex prevents lock contention on high-throughput hot paths.
+	closed       atomic.Bool
+
 	listenersMu  sync.RWMutex
 	onWriteHooks []WriteListener
 }
@@ -136,9 +138,7 @@ func (s *Store) getShard(key string) *shard {
 
 // Set stores a key-value pair with an optional TTL duration.
 func (s *Store) Set(key string, val []byte, ttl time.Duration) error {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return ErrStoreClosed
 	}
 
@@ -150,9 +150,7 @@ func (s *Store) Set(key string, val []byte, ttl time.Duration) error {
 
 // Get retrieves a key's value. Performs lazy expiration if expired.
 func (s *Store) Get(key string) ([]byte, bool) {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return nil, false
 	}
 
@@ -162,9 +160,7 @@ func (s *Store) Get(key string) ([]byte, bool) {
 
 // Delete purges a key from the store.
 func (s *Store) Delete(key string) bool {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return false
 	}
 
@@ -177,9 +173,7 @@ func (s *Store) Delete(key string) bool {
 
 // Exists checks if a non-expired key is present.
 func (s *Store) Exists(key string) bool {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return false
 	}
 
@@ -189,9 +183,7 @@ func (s *Store) Exists(key string) bool {
 
 // TTL returns remaining duration and existence flag.
 func (s *Store) TTL(key string) (time.Duration, bool) {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return -2, false
 	}
 
@@ -201,9 +193,7 @@ func (s *Store) TTL(key string) (time.Duration, bool) {
 
 // Expire sets or modifies the TTL on an existing key.
 func (s *Store) Expire(key string, ttl time.Duration) bool {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return false
 	}
 
@@ -217,9 +207,7 @@ func (s *Store) Expire(key string, ttl time.Duration) bool {
 
 // Len returns current valid key count across all shards.
 func (s *Store) Len() int64 {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return 0
 	}
 
@@ -233,9 +221,7 @@ func (s *Store) Len() int64 {
 
 // Snapshot returns a thread-safe point-in-time slice of all non-expired entries across shards.
 func (s *Store) Snapshot() []SnapshotEntry {
-	s.closedLock.RLock()
-	defer s.closedLock.RUnlock()
-	if s.closed {
+	if s.closed.Load() {
 		return nil
 	}
 
@@ -265,13 +251,9 @@ func (s *Store) Snapshot() []SnapshotEntry {
 
 // Close gracefully stops the background active sweeper.
 func (s *Store) Close() error {
-	s.closedLock.Lock()
-	if s.closed {
-		s.closedLock.Unlock()
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	s.closed = true
-	s.closedLock.Unlock()
 
 	s.cancel()
 	s.sweeperWg.Wait()
