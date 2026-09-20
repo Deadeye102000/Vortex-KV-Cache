@@ -1,0 +1,12 @@
+--- internal/store/store.go
++++ internal/store/store.go
+@@ -65,7 +65,8 @@ type Store struct {
+	ctx          context.Context
+	cancel       context.CancelFunc
+	sweeperWg    sync.WaitGroup
+-	closed       atomic.Bool
++	// Optimization: Using atomic.Bool instead of sync.RWMutex prevents lock contention on high-throughput hot paths.
++	closed       atomic.Bool
+
+	listenersMu  sync.RWMutex
+	onWriteHooks []WriteListener
