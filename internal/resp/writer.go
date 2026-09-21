@@ -12,7 +12,8 @@ var (
 
 // Writer encodes and writes RESP2 protocol frames.
 type Writer struct {
-	writer *bufio.Writer
+	writer  *bufio.Writer
+	scratch [32]byte
 }
 
 // NewWriter wraps an io.Writer (such as a net.Conn) in a buffered RESP writer.
@@ -75,7 +76,9 @@ func (w *Writer) WriteInteger(n int64) error {
 	if err := w.writer.WriteByte(byte(TypeInteger)); err != nil {
 		return err
 	}
-	if _, err := w.writer.WriteString(strconv.FormatInt(n, 10)); err != nil {
+	// Optimization: replaced strconv.FormatInt with zero-allocation strconv.AppendInt
+	numBytes := strconv.AppendInt(w.scratch[:0], n, 10)
+	if _, err := w.writer.Write(numBytes); err != nil {
 		return err
 	}
 	_, err := w.writer.Write(crlf)
@@ -90,7 +93,9 @@ func (w *Writer) WriteBulkString(b []byte) error {
 	if err := w.writer.WriteByte(byte(TypeBulkString)); err != nil {
 		return err
 	}
-	if _, err := w.writer.WriteString(strconv.Itoa(len(b))); err != nil {
+	// Optimization: replaced strconv.Itoa with zero-allocation strconv.AppendInt
+	lenBytes := strconv.AppendInt(w.scratch[:0], int64(len(b)), 10)
+	if _, err := w.writer.Write(lenBytes); err != nil {
 		return err
 	}
 	if _, err := w.writer.Write(crlf); err != nil {
@@ -129,7 +134,9 @@ func (w *Writer) WriteArray(values []Value) error {
 	if err := w.writer.WriteByte(byte(TypeArray)); err != nil {
 		return err
 	}
-	if _, err := w.writer.WriteString(strconv.Itoa(len(values))); err != nil {
+	// Optimization: replaced strconv.Itoa with zero-allocation strconv.AppendInt
+	lenBytes := strconv.AppendInt(w.scratch[:0], int64(len(values)), 10)
+	if _, err := w.writer.Write(lenBytes); err != nil {
 		return err
 	}
 	if _, err := w.writer.Write(crlf); err != nil {
