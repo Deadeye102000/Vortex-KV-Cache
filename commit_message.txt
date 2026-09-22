@@ -1,0 +1,13 @@
+⚡ Bolt: [performance improvement] Remove AccessedAt on cache get
+
+💡 What:
+Removed the `AccessedAt` field from `Entry` completely, as it was being tracked on every cache read but never used for either eviction logic (which is handled separately via `EvictionPolicy`) or TTL calculation.
+
+🎯 Why:
+The `AccessedAt` field caused the `Entry` struct to be larger than necessary and forced an unnecessary, and potentially racy mutation inside a read lock `RUnlock()`.
+
+📊 Impact:
+Shrinks cache `Entry` memory overhead footprint and eliminates one 64-bit int assignment per cache read `get()` invocation. Reduces cache read latency marginally and lowers memory requirements per key linearly.
+
+🔬 Measurement:
+Run `cd internal/store && go test -bench=BenchmarkStore_Reads`. You should see `ns/op` reduce. Note: We reverted the `[]byte` slice zero-allocation optimization to ensure memory isolation inside cache responses.
