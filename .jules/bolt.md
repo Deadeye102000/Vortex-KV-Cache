@@ -1,3 +1,6 @@
 ## 2024-05-10 - Replace FNV-1a with maphash
 **Learning:** `vortex-cache` uses a custom FNV-1a hash implementation for routing keys to shards. Go's built-in `hash/maphash` is significantly faster (especially on architectures with AES-NI instructions) because it's implemented in assembly and uses a fast hash algorithm (based on AES/Wyhash).
 **Action:** Replace custom FNV-1a hashing with `hash/maphash` to speed up key routing across all operations (`GET`, `SET`, `DEL`, etc.).
+## 2024-05-15 - Remove Allocation in Store Get
+**Learning:** Returning a slice copy from `shard.get()` is a massive bottleneck. Go GC overhead parsing the map makes allocating the copy slow, slowing down read throughput. Slices in Go only hold reference to underlying arrays. While `Entry` has `valCopy := make([]byte, len(val))` and `copy(valCopy, val)` in `NewEntry` ensuring the value does not get mutated externally, when doing `get()` the same slice does not need a copy.
+**Action:** Removed byte array copying in `shard.get()` and replaced `entry.AccessedAt = now` with `atomic.StoreInt64(&entry.AccessedAt, now)` because `AccessedAt` can be mutated concurrently from `get()` readers. It speeds up the store reads significantly.

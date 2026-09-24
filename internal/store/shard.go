@@ -2,6 +2,7 @@ package store
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -78,9 +79,9 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry.AccessedAt = now
-	valCopy := make([]byte, len(entry.Value))
-	copy(valCopy, entry.Value)
+	atomic.StoreInt64(&entry.AccessedAt, now)
+	valCopy := entry.Value
+
 	s.mu.RUnlock()
 
 	// Notify eviction policy under write lock or upgrade lock safely
