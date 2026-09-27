@@ -79,8 +79,9 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 	}
 
 	entry.AccessedAt = now
-	valCopy := make([]byte, len(entry.Value))
-	copy(valCopy, entry.Value)
+	// Optimization: Return reference directly instead of copying slice.
+	// NewEntry already guarantees immutability on Set.
+	val := entry.Value
 	s.mu.RUnlock()
 
 	// Notify eviction policy under write lock or upgrade lock safely
@@ -92,7 +93,7 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		s.mu.Unlock()
 	}
 
-	return valCopy, true
+	return val, true
 }
 
 // delete removes a key from the shard. Returns true if the key was present.
