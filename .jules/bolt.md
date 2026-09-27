@@ -1,3 +1,9 @@
 ## 2024-05-10 - Replace FNV-1a with maphash
 **Learning:** `vortex-cache` uses a custom FNV-1a hash implementation for routing keys to shards. Go's built-in `hash/maphash` is significantly faster (especially on architectures with AES-NI instructions) because it's implemented in assembly and uses a fast hash algorithm (based on AES/Wyhash).
 **Action:** Replace custom FNV-1a hashing with `hash/maphash` to speed up key routing across all operations (`GET`, `SET`, `DEL`, etc.).
+## 2024-05-10 - Zero-copy GET reads
+**Learning:** `vortex-cache` has a redundancy in `get()`. It allocates a new byte slice and copies the value on every single cache hit (`GET`). However, `internal/store/entry.go`'s `NewEntry()` constructor *already* performs a defensive deep copy when keys are inserted (`SET`), and the slice is never mutated by the caching engine after creation.
+**Action:** Return a reference directly in `get()` instead of performing a redundant byte slice copy to eliminate memory allocations and reduce bandwidth overhead on the hot path.
+## 2024-05-10 - Zero-copy GET reads Server Side
+**Learning:** Returning a slice by reference instead of copying it requires ensuring that all callers that receive the slice don't mutate it. In this codebase, the cache `Get` method returns a byte slice to the handler, which then used `resp.NewBulkString` which copies the slice *again*. Thus making the zero copy optimization safe. However, this introduced another redundancy, so `resp.NewBulkStringBytes` was used to pass the slice safely and avoid a copy at the RESP serialization boundary.
+**Action:** Remove defensive byte slice allocations in the GET hot path by updating both `shard.go` to return a slice reference directly and `handler.go` to use `NewBulkStringBytes` which allows the `resp.Writer` to directly send those bytes without copying.

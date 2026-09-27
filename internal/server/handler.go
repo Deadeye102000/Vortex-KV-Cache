@@ -96,7 +96,8 @@ func (h *Handler) handleGet(args []resp.Value) resp.Value {
 	if !found {
 		return resp.NewNullBulkString()
 	}
-	return resp.NewBulkString(val)
+	// Use NewBulkStringBytes to avoid redundant copy. The RESP writer will just write the bytes directly.
+	return resp.NewBulkStringBytes(val)
 }
 
 func (h *Handler) handleSet(args []resp.Value) resp.Value {
