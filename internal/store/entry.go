@@ -10,7 +10,6 @@ import (
 type Entry struct {
 	Value      []byte
 	CreatedAt  int64 // Unix nanoseconds
-	AccessedAt int64 // Unix nanoseconds
 	ExpiresAt  int64 // Unix nanoseconds (0 indicates no expiration)
 }
 
@@ -29,7 +28,6 @@ func NewEntry(val []byte, ttl time.Duration, now int64) *Entry {
 	return &Entry{
 		Value:      valCopy,
 		CreatedAt:  now,
-		AccessedAt: now,
 		ExpiresAt:  expiresAt,
 	}
 }

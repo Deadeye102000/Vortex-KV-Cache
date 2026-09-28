@@ -78,9 +78,8 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry.AccessedAt = now
-	valCopy := make([]byte, len(entry.Value))
-	copy(valCopy, entry.Value)
+
+
 	s.mu.RUnlock()
 
 	// Notify eviction policy under write lock or upgrade lock safely
@@ -92,7 +91,7 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		s.mu.Unlock()
 	}
 
-	return valCopy, true
+	return entry.Value, true
 }
 
 // delete removes a key from the shard. Returns true if the key was present.

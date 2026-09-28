@@ -41,9 +41,9 @@ func NewBulkString(b []byte) Value {
 	if b == nil {
 		return Value{Type: TypeBulkString, Nil: true}
 	}
-	valCopy := make([]byte, len(b))
-	copy(valCopy, b)
-	return Value{Type: TypeBulkString, Bulk: valCopy}
+
+
+	return Value{Type: TypeBulkString, Bulk: b}
 }
 
 // NewBulkStringBytes creates a RESP BulkString directly without copying slice.

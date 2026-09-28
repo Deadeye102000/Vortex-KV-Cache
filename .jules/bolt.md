@@ -1,3 +1,6 @@
 ## 2024-05-10 - Replace FNV-1a with maphash
 **Learning:** `vortex-cache` uses a custom FNV-1a hash implementation for routing keys to shards. Go's built-in `hash/maphash` is significantly faster (especially on architectures with AES-NI instructions) because it's implemented in assembly and uses a fast hash algorithm (based on AES/Wyhash).
 **Action:** Replace custom FNV-1a hashing with `hash/maphash` to speed up key routing across all operations (`GET`, `SET`, `DEL`, etc.).
+## 2024-05-15 - Remove Unused Entry.AccessedAt and Avoid byte[] Copies in Reads
+**Learning:** `vortex-cache` tracked an `AccessedAt` timestamp on cache entries but never utilized it for any core logic (evictions are tracked separately via the `lruPolicy` list). Writing to `entry.AccessedAt` during a read required an expensive lock upgrade (`mu.RUnlock()` -> `mu.Lock()`) or an unsafe concurrent write. By removing it, we keep `GET` operations purely read-only on the cache entry struct. In addition, copying the returned byte slice during `GET` operations on every read was generating unnecessary garbage and increasing memory allocation overhead, and removing it made read benchmarks zero-alloc.
+**Action:** Removed unused `AccessedAt` fields and the associated deep slice copies during read logic, ensuring caching `GET` operations remain read-only and zero-alloc.
