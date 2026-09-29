@@ -96,7 +96,9 @@ func (h *Handler) handleGet(args []resp.Value) resp.Value {
 	if !found {
 		return resp.NewNullBulkString()
 	}
-	return resp.NewBulkString(val)
+	// Optimization: use NewBulkStringBytes to avoid an unnecessary allocation and copy.
+	// cache.Get already returns a safe copy of the byte slice.
+	return resp.NewBulkStringBytes(val)
 }
 
 func (h *Handler) handleSet(args []resp.Value) resp.Value {
