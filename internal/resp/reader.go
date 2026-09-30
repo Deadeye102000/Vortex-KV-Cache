@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"unsafe"
 )
 
 var (
@@ -52,7 +53,8 @@ func (r *Reader) ReadValue() (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		n, err := strconv.ParseInt(string(line), 10, 64)
+		// Optimization: Avoid allocation when parsing integer from bytes
+		n, err := strconv.ParseInt(unsafe.String(unsafe.SliceData(line), len(line)), 10, 64)
 		if err != nil {
 			return Value{}, fmt.Errorf("%w: invalid integer format", ErrInvalidSyntax)
 		}
@@ -88,7 +90,8 @@ func (r *Reader) readBulk() (Value, error) {
 		return Value{}, err
 	}
 
-	length, err := strconv.Atoi(string(line))
+	// Optimization: Avoid allocation when parsing bulk length from bytes
+	length, err := strconv.Atoi(unsafe.String(unsafe.SliceData(line), len(line)))
 	if err != nil {
 		return Value{}, fmt.Errorf("%w: invalid bulk length", ErrInvalidSyntax)
 	}
@@ -121,7 +124,8 @@ func (r *Reader) readArray() (Value, error) {
 		return Value{}, err
 	}
 
-	count, err := strconv.Atoi(string(line))
+	// Optimization: Avoid allocation when parsing array count from bytes
+	count, err := strconv.Atoi(unsafe.String(unsafe.SliceData(line), len(line)))
 	if err != nil {
 		return Value{}, fmt.Errorf("%w: invalid array count", ErrInvalidSyntax)
 	}
