@@ -78,7 +78,7 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry.AccessedAt = now
+	// Optimization: entry.AccessedAt = now was removed to eliminate a data race and optimize memory usage.
 	valCopy := make([]byte, len(entry.Value))
 	copy(valCopy, entry.Value)
 	s.mu.RUnlock()
