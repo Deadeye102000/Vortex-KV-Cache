@@ -78,7 +78,7 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry.AccessedAt = now
+	// ⚡ Bolt Optimization: Removed entry.AccessedAt mutation during read to prevent data races and CPU cache line invalidation under RLock.
 	valCopy := make([]byte, len(entry.Value))
 	copy(valCopy, entry.Value)
 	s.mu.RUnlock()
