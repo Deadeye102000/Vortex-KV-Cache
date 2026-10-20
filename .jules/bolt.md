@@ -1,3 +1,6 @@
 ## 2024-05-10 - Replace FNV-1a with maphash
 **Learning:** `vortex-cache` uses a custom FNV-1a hash implementation for routing keys to shards. Go's built-in `hash/maphash` is significantly faster (especially on architectures with AES-NI instructions) because it's implemented in assembly and uses a fast hash algorithm (based on AES/Wyhash).
 **Action:** Replace custom FNV-1a hashing with `hash/maphash` to speed up key routing across all operations (`GET`, `SET`, `DEL`, etc.).
+## 2026-10-20 - Unnecessary metadata updates causing data races and CPU cache invalidation
+**Learning:** `vortex-cache` eviction policies (like LRU) are decoupled from the core `Entry` struct and rely on explicit callbacks (`OnGet`, `OnSet`, `OnDelete`). Tracking `AccessedAt` within the core `Entry` struct on read operations (`Get`) requires modifying the entry under a read lock (`RLock`), leading to data races and CPU cache invalidations, hurting performance without adding value because the cache engine doesn't use `AccessedAt` or `CreatedAt` for anything.
+**Action:** Remove `AccessedAt` and `CreatedAt` fields from the `Entry` struct and avoid modifying entry fields during read operations to prevent data races and maximize read throughput.
