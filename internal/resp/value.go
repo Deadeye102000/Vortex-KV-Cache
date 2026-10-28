@@ -14,11 +14,11 @@ const (
 // Value represents a parsed or encodable RESP2 frame.
 type Value struct {
 	Type  Type
-	Str   string   // Used for SimpleString and Error
-	Num   int64    // Used for Integer
-	Bulk  []byte   // Used for BulkString
-	Array []Value  // Used for Array
-	Nil   bool     // Indicates Null BulkString ($-1\r\n) or Null Array (*-1\r\n)
+	Str   string  // Used for SimpleString and Error
+	Num   int64   // Used for Integer
+	Bulk  []byte  // Used for BulkString
+	Array []Value // Used for Array
+	Nil   bool    // Indicates Null BulkString ($-1\r\n) or Null Array (*-1\r\n)
 }
 
 // NewSimpleString creates a RESP SimpleString (+OK\r\n).
