@@ -7,11 +7,12 @@ import (
 // Entry represents an individual cache item stored in memory.
 // Timestamps are stored as Unix nanoseconds (int64) to reduce memory allocations
 // and eliminate Go Garbage Collector pointer-chasing overhead.
+// Optimization: We avoid tracking access metadata directly in the entry struct
+// to prevent mutating fields under RLock, which causes data races and CPU cache invalidation.
 type Entry struct {
-	Value      []byte
-	CreatedAt  int64 // Unix nanoseconds
-	AccessedAt int64 // Unix nanoseconds
-	ExpiresAt  int64 // Unix nanoseconds (0 indicates no expiration)
+	Value     []byte
+	CreatedAt int64 // Unix nanoseconds
+	ExpiresAt int64 // Unix nanoseconds (0 indicates no expiration)
 }
 
 // NewEntry constructs a new cache entry.
@@ -27,10 +28,9 @@ func NewEntry(val []byte, ttl time.Duration, now int64) *Entry {
 	copy(valCopy, val)
 
 	return &Entry{
-		Value:      valCopy,
-		CreatedAt:  now,
-		AccessedAt: now,
-		ExpiresAt:  expiresAt,
+		Value:     valCopy,
+		CreatedAt: now,
+		ExpiresAt: expiresAt,
 	}
 }
 
