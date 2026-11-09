@@ -1,3 +1,3 @@
-## 2024-05-10 - Replace FNV-1a with maphash
-**Learning:** `vortex-cache` uses a custom FNV-1a hash implementation for routing keys to shards. Go's built-in `hash/maphash` is significantly faster (especially on architectures with AES-NI instructions) because it's implemented in assembly and uses a fast hash algorithm (based on AES/Wyhash).
-**Action:** Replace custom FNV-1a hashing with `hash/maphash` to speed up key routing across all operations (`GET`, `SET`, `DEL`, etc.).
+## 2024-05-24 - [Avoid Mutating Cache Entries Under RLock]
+**Learning:** Mutating state (like an `AccessedAt` field) on an item while holding only an `RLock` in Go not only causes data races (detectable by `go test -race -bench=. ./...`), but drastically impacts performance due to CPU cache line invalidation. The eviction policy in `vortex-cache` is explicitly decoupled via callbacks anyway, meaning internal `AccessedAt` fields are dead weight.
+**Action:** Never mutate cache entry struct fields during `Get` operations under an RLock. Use the explicit eviction policy hooks (e.g. `s.eviction.OnGet()`) under the appropriate locking mechanism instead.
