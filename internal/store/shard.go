@@ -78,7 +78,8 @@ func (s *shard) get(key string, now int64) ([]byte, bool) {
 		return nil, false
 	}
 
-	entry.AccessedAt = now
+	// Optimization: Removed entry.AccessedAt = now mutation under RLock to prevent
+	// data races and CPU cache invalidations, since eviction policy callbacks handle access tracking.
 	valCopy := make([]byte, len(entry.Value))
 	copy(valCopy, entry.Value)
 	s.mu.RUnlock()
